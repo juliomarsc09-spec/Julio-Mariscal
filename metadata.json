@@ -1,0 +1,6 @@
+{
+  "name": "Profiling Media Pembawa Karantina",
+  "description": "Aplikasi profiling media pembawa karantina hewan, ikan, dan tumbuhan berbasis nama pemohon, komoditas, asal negara, dan lokasi pemeriksaan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
