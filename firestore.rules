@@ -11,6 +11,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidShardDocId(id) {
+      return isValidId(id) && id.matches('^shard_[0-9]{3}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -63,6 +67,85 @@ service cloud.firestore {
         && isValidId(data.uid)
         && data.uid == userId
         && data.createdAt is timestamp;
+    }
+
+    function isValidSharedMeta(data) {
+      return data.keys().hasAll(['shardVersion', 'shardCount', 'totalRecords', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['shardVersion', 'shardCount', 'totalRecords', 'updatedBy', 'updatedAt'])
+        && data.shardVersion is int && data.shardVersion >= 1 && data.shardVersion <= 1000000000
+        && data.shardCount is int && data.shardCount >= 0 && data.shardCount <= 500
+        && data.totalRecords is int && data.totalRecords >= 0 && data.totalRecords <= 225000
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedBranding(data) {
+      return data.keys().hasAll(['customLogo', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['customLogo', 'updatedBy', 'updatedAt'])
+        && data.customLogo is string && data.customLogo.size() <= 350000
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedDatasetShard(data) {
+      return data.keys().hasAll(['index', 'recordCount', 'records', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['index', 'recordCount', 'records', 'updatedBy', 'updatedAt'])
+        && data.index is int && data.index >= 0 && data.index <= 500
+        && data.recordCount is int && data.recordCount >= 0 && data.recordCount <= 450
+        && data.records is list && data.records.size() <= 450
+        && (data.records.size() == 0 || data.records[0] is map)
+        && data.recordCount == data.records.size()
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedWatchlists(data) {
+      return data.keys().hasAll(['commodityWatchlist', 'countryWatchlist', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['commodityWatchlist', 'countryWatchlist', 'updatedBy', 'updatedAt'])
+        && data.commodityWatchlist is list && data.commodityWatchlist.size() <= 500
+        && (data.commodityWatchlist.size() == 0 || data.commodityWatchlist[0] is map)
+        && data.countryWatchlist is list && data.countryWatchlist.size() <= 500
+        && (data.countryWatchlist.size() == 0 || data.countryWatchlist[0] is map)
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedCompliance(data) {
+      return data.keys().hasAll(['scores', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['scores', 'updatedBy', 'updatedAt'])
+        && data.scores is map && data.scores.keys().size() <= 5000
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedContacts(data) {
+      return data.keys().hasAll(['contacts', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['contacts', 'shardCount', 'totalContacts', 'updatedBy', 'updatedAt'])
+        && data.contacts is map && data.contacts.keys().size() <= 5000
+        && (!('shardCount' in data) || (data.shardCount is int && data.shardCount >= 0 && data.shardCount <= 200))
+        && (!('totalContacts' in data) || (data.totalContacts is int && data.totalContacts >= 0 && data.totalContacts <= 100000))
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedContactShard(data) {
+      return data.keys().hasAll(['index', 'contactCount', 'contacts', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['index', 'contactCount', 'contacts', 'updatedBy', 'updatedAt'])
+        && data.index is int && data.index >= 0 && data.index <= 200
+        && data.contactCount is int && data.contactCount >= 0 && data.contactCount <= 500
+        && data.contacts is map && data.contacts.keys().size() <= 500
+        && data.contactCount == data.contacts.keys().size()
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedLogs(data) {
+      return data.keys().hasAll(['logs', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['logs', 'updatedBy', 'updatedAt'])
+        && data.logs is list && data.logs.size() <= 200
+        && (data.logs.size() == 0 || data.logs[0] is map)
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
     }
 
     function isValidWatchlistCloudItem(data, itemId) {
@@ -177,6 +260,126 @@ service cloud.firestore {
       allow delete: if isValidId(userId) && isAdmin();
     }
 
+    // Shared BBKHIT Cloud Store (AI Studio <-> Published Unified Persistence Without Login, Monotonic Version Lock)
+    match /shared_meta/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedMeta(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedMeta(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().shardVersion > existing().shardVersion
+        && incoming().diff(existing()).affectedKeys().hasOnly(['shardVersion', 'shardCount', 'totalRecords', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_branding/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedBranding(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedBranding(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['customLogo', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_dataset_shards/{shardId} {
+      allow get: if isValidShardDocId(shardId);
+      allow list: if false;
+      allow create: if isValidShardDocId(shardId)
+        && isValidSharedDatasetShard(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidShardDocId(shardId)
+        && isValidSharedDatasetShard(incoming())
+        && incoming().index == existing().index
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['recordCount', 'records', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_watchlists/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedWatchlists(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedWatchlists(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['commodityWatchlist', 'countryWatchlist', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_compliance/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedCompliance(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedCompliance(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['scores', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_contacts/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedContacts(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedContacts(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['contacts', 'shardCount', 'totalContacts', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_contact_shards/{shardId} {
+      allow get: if isValidShardDocId(shardId);
+      allow list: if false;
+      allow create: if isValidShardDocId(shardId)
+        && isValidSharedContactShard(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidShardDocId(shardId)
+        && isValidSharedContactShard(incoming())
+        && incoming().index == existing().index
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['contactCount', 'contacts', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /shared_logs/{docId} {
+      allow get: if isValidId(docId) && docId == 'current';
+      allow list: if false;
+      allow create: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedLogs(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(docId)
+        && docId == 'current'
+        && isValidSharedLogs(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['logs', 'updatedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
     match /watchlist_items/{itemId} {
       allow get: if isValidId(itemId)
         && isSignedIn()
@@ -249,7 +452,7 @@ service cloud.firestore {
 
     // Connection probe path (used by boot getDocFromServer check)
     match /test/{docId} {
-      allow get: if isValidId(docId) && false;
+      allow get: if isValidId(docId) && docId == 'connection';
     }
   }
 }

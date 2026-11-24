@@ -82,6 +82,211 @@
       },
       "required": ["uid", "createdAt"]
     },
+    "SharedAppMeta": {
+      "title": "SharedAppMeta",
+      "description": "Authoritative metadata tracking shared dataset shards and monotonic version across AI Studio and Published.",
+      "type": "object",
+      "properties": {
+        "shardVersion": {
+          "type": "integer"
+        },
+        "shardCount": {
+          "type": "integer"
+        },
+        "totalRecords": {
+          "type": "integer"
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["shardVersion", "shardCount", "totalRecords", "updatedBy", "updatedAt"]
+    },
+    "SharedBranding": {
+      "title": "SharedBranding",
+      "description": "Shared application branding logo persisted across AI Studio and Published.",
+      "type": "object",
+      "properties": {
+        "customLogo": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["customLogo", "updatedBy", "updatedAt"]
+    },
+    "SharedDatasetShard": {
+      "title": "SharedDatasetShard",
+      "description": "Native Map/List shard holding up to 450 quarantine declaration records.",
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "recordCount": {
+          "type": "integer"
+        },
+        "records": {
+          "type": "array",
+          "description": "Array of native MediaPembawaRecord maps (max 450 per shard)."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["index", "recordCount", "records", "updatedBy", "updatedAt"]
+    },
+    "SharedWatchlists": {
+      "title": "SharedWatchlists",
+      "description": "Shared priority commodity and country watchlists across AI Studio and Published.",
+      "type": "object",
+      "properties": {
+        "commodityWatchlist": {
+          "type": "array",
+          "description": "Array of PriorityCommodityWatchItem maps (max 500)."
+        },
+        "countryWatchlist": {
+          "type": "array",
+          "description": "Array of PriorityCountryWatchItem maps (max 500)."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["commodityWatchlist", "countryWatchlist", "updatedBy", "updatedAt"]
+    },
+    "SharedCompliance": {
+      "title": "SharedCompliance",
+      "description": "Shared company compliance scores map persisted in Firestore.",
+      "type": "object",
+      "properties": {
+        "scores": {
+          "type": "object",
+          "description": "Map of normalized company names to compliance score objects."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["scores", "updatedBy", "updatedAt"]
+    },
+    "SharedContacts": {
+      "title": "SharedContacts",
+      "description": "Shared company directory & registry index persisted in Firestore.",
+      "type": "object",
+      "properties": {
+        "contacts": {
+          "type": "object",
+          "description": "Map of company core keys to contact/registry objects when compact, or empty map when sharded."
+        },
+        "shardCount": {
+          "type": "integer",
+          "description": "Optional number of contact shards when directory exceeds single-document payload threshold."
+        },
+        "totalContacts": {
+          "type": "integer",
+          "description": "Optional total company contact count across shards."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["contacts", "updatedBy", "updatedAt"]
+    },
+    "SharedContactShard": {
+      "title": "SharedContactShard",
+      "description": "Sharded company contact & 17-column registry entries map (up to 400 per shard).",
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "contactCount": {
+          "type": "integer"
+        },
+        "contacts": {
+          "type": "object",
+          "description": "Map of company core keys to CompanyContactInfo objects (max 500 per shard)."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["index", "contactCount", "contacts", "updatedBy", "updatedAt"]
+    },
+    "SharedLogs": {
+      "title": "SharedLogs",
+      "description": "Shared data audit trail history persisted in Firestore.",
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "array",
+          "description": "Array of DataUpdateLog maps (max 200)."
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["logs", "updatedBy", "updatedAt"]
+    },
     "WatchlistCloudItem": {
       "title": "WatchlistCloudItem",
       "description": "Officer-owned cloud watchlist entry for high-priority commodities or countries.",
@@ -212,13 +417,45 @@
       "schema": { "$ref": "#/entities/AdminGrant" },
       "description": "Trusted admin UID registry."
     },
+    "/shared_meta/{docId}": {
+      "schema": { "$ref": "#/entities/SharedAppMeta" },
+      "description": "Singleton 'current' metadata doc tracking dataset shards, total records, and monotonic shardVersion."
+    },
+    "/shared_branding/{docId}": {
+      "schema": { "$ref": "#/entities/SharedBranding" },
+      "description": "Singleton 'current' branding doc storing the persisted custom logo."
+    },
+    "/shared_dataset_shards/{shardId}": {
+      "schema": { "$ref": "#/entities/SharedDatasetShard" },
+      "description": "Sharded quarantine declaration records (up to 450 per doc)."
+    },
+    "/shared_watchlists/{docId}": {
+      "schema": { "$ref": "#/entities/SharedWatchlists" },
+      "description": "Singleton 'current' priority commodity and country watchlists."
+    },
+    "/shared_compliance/{docId}": {
+      "schema": { "$ref": "#/entities/SharedCompliance" },
+      "description": "Singleton 'current' company compliance scores map."
+    },
+    "/shared_contacts/{docId}": {
+      "schema": { "$ref": "#/entities/SharedContacts" },
+      "description": "Singleton 'current' company registry & contacts index."
+    },
+    "/shared_contact_shards/{shardId}": {
+      "schema": { "$ref": "#/entities/SharedContactShard" },
+      "description": "Sharded company contacts & 17-column registry directory."
+    },
+    "/shared_logs/{docId}": {
+      "schema": { "$ref": "#/entities/SharedLogs" },
+      "description": "Singleton 'current' audit trail update history."
+    },
     "/watchlist_items/{itemId}": {
       "schema": { "$ref": "#/entities/WatchlistCloudItem" },
-      "description": "Officer-owned priority commodity and country surveillance notes synced to Firestore."
+      "description": "Officer-owned priority commodity and country surveillance items."
     },
     "/quarantine_notes/{noteId}": {
       "schema": { "$ref": "#/entities/QuarantineCloudNote" },
-      "description": "Officer-owned inspection and compliance notes synced to Firestore."
+      "description": "Officer-owned inspection and compliance notes."
     }
   }
 }

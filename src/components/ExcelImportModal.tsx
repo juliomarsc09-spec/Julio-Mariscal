@@ -15,17 +15,34 @@ import {
   Fish,
   Sprout,
   Check,
+  Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { MediaPembawaRecord, QuarantineCategory, RiskLevel, TradeActivityType } from '../types';
 import { calculateAutomaticRisk, parseList } from '../data/quarantineData';
-import { getCanonicalCompanyName } from '../data/companyNormalizer';
+import { extractCompanyCoreName, getCanonicalCompanyName } from '../data/companyNormalizer';
+import { UploadProgressBar } from './UploadProgressBar';
+import {
+  UploadProgressCallback,
+  UploadProgressState,
+  formatBytesToMB,
+  formatUploadErrorMessage,
+  verifyExcelImportPasscode,
+} from '../utils/uploadWithProgress';
+
+const MAX_EXCEL_UPLOAD_BYTES = 25 * 1024 * 1024; // Mendukung minimal 5MB hingga 25MB
 
 interface ExcelImportModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportRecords: (newRecords: MediaPembawaRecord[]) => void | Promise<void>;
+  onImportRecords: (
+    newRecords: MediaPembawaRecord[],
+    onProgress?: UploadProgressCallback
+  ) => void | Promise<void>;
   currentCount: number;
+  existingRecords?: MediaPembawaRecord[];
 }
 
 
@@ -34,6 +51,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
   onClose,
   onImportRecords,
   currentCount,
+  existingRecords = [],
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<QuarantineCategory | null>(null);
   const [forceSelectedCategory, setForceSelectedCategory] = useState<boolean>(true);
@@ -44,6 +62,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
   const [parsedPreview, setParsedPreview] = useState<MediaPembawaRecord[] | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
+  const [importPasscode, setImportPasscode] = useState('');
+  const [showImportPasscode, setShowImportPasscode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
@@ -120,6 +141,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     const idxPemilik = colIndex.pemilik;
     const idxEmail = colIndex.email;
 
+    const nowIso = new Date().toISOString();
     const rawParsedList: MediaPembawaRecord[] = [];
 
     // Iterate through all data rows: pastikan data yang di upload excel masuk semua tanpa terkecuali
@@ -204,7 +226,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
         catatanKarantina: rawCatatan,
         pemilik: rawPemilik,
         email: rawEmail,
-        createdAt: new Date().toISOString(),
+        createdAt: nowIso,
       });
     }
 
@@ -214,16 +236,33 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
       return;
     }
 
+    // Build O(1) lookup from existing records so matching companies automatically unify & append onto existing data
+    const coreToExistingName = new Map<string, string>();
+    for (let i = 0; i < existingRecords.length; i++) {
+      const name = (existingRecords[i].pemohon || '').trim().toUpperCase();
+      if (!name) continue;
+      const core = extractCompanyCoreName(name) || name;
+      if (!coreToExistingName.has(core)) {
+        coreToExistingName.set(core, name);
+      }
+    }
+
     // Pastikan SEMUA data yang di-upload masuk semua datanya tanpa terkecuali
+    const stamp = Date.now();
     const finalParsedList = rawParsedList.map((r, idx) => {
-      const canonicalComp = getCanonicalCompanyName(r.pemohon);
+      const core = extractCompanyCoreName(r.pemohon) || r.pemohon;
+      let canonicalComp = coreToExistingName.get(core);
+      if (!canonicalComp) {
+        canonicalComp = getCanonicalCompanyName(r.pemohon);
+        if (core) coreToExistingName.set(core, canonicalComp);
+      }
       const unifiedCategory = forceSelectedCategory && selectedCategory
         ? selectedCategory
         : (r.kategori || selectedCategory);
 
       return {
         ...r,
-        id: `excel-${Date.now()}-${idx + 1}-${Math.random().toString(36).substr(2, 6)}`,
+        id: `excel-${stamp}-${idx + 1}-${Math.random().toString(36).slice(2, 8)}`,
         no: currentCount + idx + 1,
         pemohon: canonicalComp,
         kategori: unifiedCategory,
@@ -250,8 +289,8 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     }
   };
 
-  // Handle Excel or CSV file upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Excel or CSV file upload (ArrayBuffer streaming for fast >=5MB file parsing)
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -261,34 +300,47 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
       return;
     }
 
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    if (file.size > MAX_EXCEL_UPLOAD_BYTES) {
+      setErrorMsg(`Ukuran file (${sizeMB} MB) melebihi batas maksimal 25 MB.`);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setIsProcessing(true);
     setErrorMsg(null);
-    setFileName(file.name);
+    setFileName(`${file.name} (${sizeMB} MB)`);
+    setUploadProgress({
+      percent: 15,
+      phase: 'Membaca file Excel / Spreadsheet...',
+      detail: `${file.name} (${formatBytesToMB(file.size)})`,
+    });
 
-    const reader = new FileReader();
-
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const workbook = XLSX.read(bstr, { type: 'binary' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const data: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
-        processRows(data);
-      } catch (err: any) {
-        console.error('Error parsing file:', err);
-        setErrorMsg('Gagal membaca file Excel. Pastikan file valid (.xlsx, .xls, .csv).');
-      } finally {
-        setIsProcessing(false);
-      }
-    };
-
-    reader.onerror = () => {
-      setErrorMsg('Terjadi kesalahan saat membaca file.');
+    try {
+      const buf = await file.arrayBuffer();
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      setUploadProgress({
+        percent: 55,
+        phase: 'Mengekstrak lembar kerja & baris data...',
+        detail: 'Memproses kolom dan mencocokkan nama perusahaan...',
+      });
+      const workbook = XLSX.read(new Uint8Array(buf), { type: 'array', dense: true });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const data: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+      setUploadProgress({
+        percent: 90,
+        phase: 'Menyiapkan pratinjau data...',
+        detail: `${Math.max(0, data.length - 1).toLocaleString('id-ID')} baris ditemukan`,
+      });
+      processRows(data);
+    } catch (err: any) {
+      console.error('Error parsing file:', err);
+      setErrorMsg('Gagal membaca file Excel. Pastikan file valid (.xlsx, .xls, .csv) dengan ukuran hingga 25MB.');
+    } finally {
       setIsProcessing(false);
-    };
-
-    reader.readAsBinaryString(file);
+      setUploadProgress(null);
+    }
   };
 
   // Handle direct paste from Excel / Google Sheets
@@ -407,17 +459,37 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     setIsSaving(true);
     setErrorMsg(null);
     try {
+      await verifyExcelImportPasscode(importPasscode);
+
+      setUploadProgress({
+        percent: 2,
+        phase: 'Memulai unggah data ke server...',
+        detail: `${parsedPreview.length.toLocaleString('id-ID')} baris siap dikirim`,
+      });
+
       // Append mode: preserve existing data, sequence from currentCount + 1
       const finalRecords = parsedPreview.map((r, idx) => ({
         ...r,
         no: currentCount + idx + 1,
       }));
 
-      await onImportRecords(finalRecords);
+      await onImportRecords(finalRecords, (progress) => {
+        setUploadProgress(progress);
+      });
+      setUploadProgress({
+        percent: 100,
+        phase: 'Selesai 100% — Data berhasil ditambahkan ke server!',
+        detail: `${finalRecords.length.toLocaleString('id-ID')} baris tersimpan`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 420));
+      setUploadProgress(null);
+      setImportPasscode('');
+      setShowImportPasscode(false);
       onClose();
     } catch (err: any) {
       console.error('Error applying import:', err);
-      setErrorMsg('Gagal menyimpan data ke database server: ' + (err?.message || 'Unknown error'));
+      setUploadProgress(null);
+      setErrorMsg(formatUploadErrorMessage(err, 'Gagal menyimpan data impor Excel.'));
     } finally {
       setIsSaving(false);
     }
@@ -491,7 +563,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                 <span>Kategori Terpilih: Karantina {selectedCategory}</span>
               </span>
             ) : (
-              <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 animate-pulse">
+              <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30">
                 <span>* Wajib Pilih Salah Satu di Bawah</span>
               </span>
             )}
@@ -692,7 +764,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                 )}
               </p>
               <p className="text-[11px] text-slate-500 pt-1">
-                Kolom dikenali otomatis: No, Kategori, Jenis Kegiatan (Ekspor, Impor, Domestik Masuk, Domestik Keluar), Pemohon, Komoditas, Tempat Periksa, Asal/Tujuan, Kode HS, Tingkat Risiko.
+                Kapasitas upload minimal 5MB (mendukung hingga 25MB). Nama perusahaan yang sama otomatis menambahkan data ke perusahaan yang sudah ada. Kolom dikenali otomatis: No, Kategori, Jenis Kegiatan, Pemohon, Komoditas, Tempat Periksa, Asal/Tujuan, Kode HS, Tingkat Risiko.
               </p>
             </div>
           </div>
@@ -729,8 +801,13 @@ No	Kategori	Jenis Kegiatan	Pemohon	Komoditas	Tempat Periksa	Asal	Kode HS
           </div>
         )}
 
-        {/* Error message */}
-        {errorMsg && (
+        {/* Upload / File Reading Progress Bar */}
+        {uploadProgress && !parsedPreview && (
+          <UploadProgressBar progress={uploadProgress} accent="emerald" />
+        )}
+
+        {/* Error message before preview */}
+        {errorMsg && !parsedPreview && (
           <div className="p-3.5 bg-rose-500/15 border border-rose-500/35 rounded-2xl flex items-center space-x-3 text-xs text-rose-800 dark:text-red-300">
             <AlertCircle className="w-4 h-4 text-rose-600 dark:text-red-400 shrink-0" />
             <span>{errorMsg}</span>
@@ -844,12 +921,59 @@ No	Kategori	Jenis Kegiatan	Pemohon	Komoditas	Tempat Periksa	Asal	Kode HS
               )}
             </div>
 
+            {/* Mandatory Passcode Gate for Excel Import Addition */}
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/35 space-y-2">
+              <label
+                htmlFor="excel-import-passcode"
+                className="flex items-center space-x-2 text-xs font-extrabold text-amber-900 dark:text-amber-200"
+              >
+                <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>Password Konfirmasi Penambahan Impor Excel (Wajib)</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="excel-import-passcode"
+                  type={showImportPasscode ? 'text' : 'password'}
+                  value={importPasscode}
+                  onChange={(e) => {
+                    setImportPasscode(e.target.value);
+                    if (errorMsg) setErrorMsg(null);
+                  }}
+                  placeholder="Masukkan password petugas untuk menambahkan data Excel..."
+                  autoComplete="off"
+                  disabled={isSaving}
+                  className="w-full min-h-[42px] glass-input rounded-xl pl-3.5 pr-10 py-2 text-xs font-semibold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowImportPasscode((prev) => !prev)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                  aria-label={showImportPasscode ? 'Sembunyikan password' : 'Tampilkan password'}
+                >
+                  {showImportPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 bg-rose-500/15 border border-rose-500/40 rounded-2xl flex items-center space-x-2.5 text-xs font-semibold text-rose-800 dark:text-red-300">
+                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-red-400 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {/* Live Server Upload Progress Bar */}
+            {uploadProgress && (
+              <UploadProgressBar progress={uploadProgress} accent="emerald" />
+            )}
+
             {/* Actions: Append Only */}
             <div className="pt-2 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3">
               <button
                 type="button"
                 onClick={onClose}
-                className="min-h-[44px] w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                disabled={isSaving}
+                className="min-h-[44px] w-full sm:w-auto px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
               >
                 Batal
               </button>
@@ -857,13 +981,13 @@ No	Kategori	Jenis Kegiatan	Pemohon	Komoditas	Tempat Periksa	Asal	Kode HS
               <button
                 type="button"
                 onClick={handleApplyImport}
-                disabled={isSaving}
+                disabled={isSaving || !importPasscode.trim()}
                 className="min-h-[44px] w-full sm:w-auto px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg transition-all flex items-center justify-center space-x-2 active:scale-95 disabled:opacity-50"
               >
                 {isSaving ? (
                   <>
                     <RefreshCw className="w-4 h-4 text-emerald-100 animate-spin" />
-                    <span>Menyimpan ke Server (+{parsedPreview.length} Record)...</span>
+                    <span>Mengunggah {Math.round(uploadProgress?.percent || 0)}%...</span>
                   </>
                 ) : (
                   <>

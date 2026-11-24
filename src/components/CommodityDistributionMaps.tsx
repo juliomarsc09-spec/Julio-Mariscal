@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { MediaPembawaRecord, ThemeMode } from '../types';
 import { resolveCountryGeo } from '../data/worldCountryCoords';
-import { GlobeMap3D, GlobeCountryPoint } from './GlobeMap3D';
+import { ConventionalMap3D, MapCountryPoint } from './ConventionalMap3D';
 
 interface CommodityDistributionMapsProps {
   data: MediaPembawaRecord[];
@@ -22,8 +22,20 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
   const [activeMapView, setActiveMapView] = useState<'BOTH' | 'IMPOR' | 'EKSPOR'>('BOTH');
   const [hoveredImpor, setHoveredImpor] = useState<string | null>(null);
   const [focusedImpor, setFocusedImpor] = useState<string | null>(null);
+  const [imporFocusSeq, setImporFocusSeq] = useState(0);
   const [hoveredEkspor, setHoveredEkspor] = useState<string | null>(null);
   const [focusedEkspor, setFocusedEkspor] = useState<string | null>(null);
+  const [eksporFocusSeq, setEksporFocusSeq] = useState(0);
+
+  const triggerFocusImpor = (name: string) => {
+    setFocusedImpor(name);
+    setImporFocusSeq((s) => s + 1);
+  };
+
+  const triggerFocusEkspor = (name: string) => {
+    setFocusedEkspor(name);
+    setEksporFocusSeq((s) => s + 1);
+  };
 
   const { imporStats, eksporStats } = useMemo(() => {
     const imporCountryMap = new Map<string, { count: number; commodities: Map<string, number> }>();
@@ -56,7 +68,7 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
       });
     });
 
-    const formatCountries = (map: typeof imporCountryMap): GlobeCountryPoint[] => {
+    const formatCountries = (map: typeof imporCountryMap): MapCountryPoint[] => {
       return Array.from(map.entries())
         .map(([name, stat]) => {
           const topComms = Array.from(stat.commodities.entries())
@@ -102,7 +114,7 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
               Visualisasi Spasial 3D & Koridor Perdagangan
             </span>
             <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-400/30 text-[10px] font-bold">
-              Dual Globe 3D
+              Peta Konvensional 3D
             </span>
           </div>
           <h3 className="text-base font-extrabold text-slate-900 dark:text-white flex items-center space-x-2 mt-1">
@@ -110,7 +122,7 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
             <span>Peta 3D Sebaran Komoditas Karantina (Impor & Ekspor)</span>
           </h3>
           <p className="text-xs text-slate-600 dark:text-slate-300 font-medium">
-            Pemetaan bola dunia 3D interaktif untuk jalur masuk barang impor dan arus keluar ekspor melalui BBKHIT DKI Jakarta
+            Pemetaan konvensional 3D diam dengan pewarnaan volume lalu lintas antarnegara — klik arus barang atau negara untuk auto-zoom detail koridor BBKHIT DKI Jakarta
           </p>
         </div>
 
@@ -192,19 +204,20 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
                 </div>
               </div>
 
-              <GlobeMap3D
+              <ConventionalMap3D
                 mode="IMPOR"
                 countries={imporStats.countries}
                 hoveredCountry={hoveredImpor}
                 focusedCountry={focusedImpor}
+                focusSeq={imporFocusSeq}
                 onHoverCountry={setHoveredImpor}
-                onSelectCountry={(name) => setFocusedImpor(name)}
+                onSelectCountry={triggerFocusImpor}
                 themeMode={themeMode}
               />
 
               <div className="space-y-1.5 pt-1">
                 <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block">
-                  Top 4 Negara Pemasok Utama & Komoditas Masuk (Klik untuk Fokus Globe)
+                  Top 4 Negara Pemasok Utama & Komoditas Masuk (Klik untuk Auto-Zoom 3D)
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {imporStats.countries.slice(0, 4).map((c) => {
@@ -215,7 +228,7 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
                         key={c.name}
                         onMouseEnter={() => setHoveredImpor(c.name)}
                         onMouseLeave={() => setHoveredImpor(null)}
-                        onClick={() => setFocusedImpor(c.name)}
+                        onClick={() => triggerFocusImpor(c.name)}
                         className={`text-left glass-sub p-2.5 rounded-xl transition-all flex flex-col justify-between ${
                           isActive
                             ? 'border-emerald-500/70 bg-emerald-500/10'
@@ -285,19 +298,20 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
                 </div>
               </div>
 
-              <GlobeMap3D
+              <ConventionalMap3D
                 mode="EKSPOR"
                 countries={eksporStats.countries}
                 hoveredCountry={hoveredEkspor}
                 focusedCountry={focusedEkspor}
+                focusSeq={eksporFocusSeq}
                 onHoverCountry={setHoveredEkspor}
-                onSelectCountry={(name) => setFocusedEkspor(name)}
+                onSelectCountry={triggerFocusEkspor}
                 themeMode={themeMode}
               />
 
               <div className="space-y-1.5 pt-1">
                 <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest block">
-                  Top 4 Negara Tujuan Ekspor Utama & Komoditas Keluar (Klik untuk Fokus Globe)
+                  Top 4 Negara Tujuan Ekspor Utama & Komoditas Keluar (Klik untuk Auto-Zoom 3D)
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {eksporStats.countries.slice(0, 4).map((c) => {
@@ -308,7 +322,7 @@ export const CommodityDistributionMaps: React.FC<CommodityDistributionMapsProps>
                         key={c.name}
                         onMouseEnter={() => setHoveredEkspor(c.name)}
                         onMouseLeave={() => setHoveredEkspor(null)}
-                        onClick={() => setFocusedEkspor(c.name)}
+                        onClick={() => triggerFocusEkspor(c.name)}
                         className={`text-left glass-sub p-2.5 rounded-xl transition-all flex flex-col justify-between ${
                           isActive
                             ? 'border-sky-500/70 bg-sky-500/10'

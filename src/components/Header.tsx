@@ -13,6 +13,7 @@ import {
   Camera,
   Sun,
   Moon,
+  ClipboardList,
 } from 'lucide-react';
 import { ActiveNavTab, ThemeMode } from '../types';
 
@@ -90,6 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Header Right Actions: Mode Tampilan + AI Risk + Menu Aksi */}
         <div className="flex items-center flex-wrap gap-2">
+
           {/* Day Light / Night Mode Selector */}
           <div
             role="group"
@@ -210,6 +212,19 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Globe2 className="w-4 h-4 shrink-0" />
               <span>Profil Negara</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('companies')}
+              className={`min-h-[42px] sm:min-h-[36px] flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
+                activeTab === 'companies'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/25 border border-indigo-400/40'
+                  : 'text-slate-700 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-slate-900/8 dark:hover:bg-white/10'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4 shrink-0" />
+              <span>Data Perusahaan</span>
             </button>
 
             <button

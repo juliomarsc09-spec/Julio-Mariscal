@@ -4,7 +4,6 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
-import { WebSocketServer, WebSocket } from 'ws';
 
 // Persistent Server-Side Storage File Path
 const STORAGE_FILE = path.join(process.cwd(), 'src', 'data', 'server_storage.json');
@@ -158,6 +157,23 @@ interface CompanyContactRecord {
   pemilik: string;
   email: string;
   updatedAt: string;
+  no?: number;
+  namaPemohon?: string;
+  jenisPerusahaan?: string;
+  namaPerusahaan?: string;
+  identitas?: string;
+  nomorIdentitas?: string;
+  nitku?: string;
+  uptRegistrasi?: string;
+  lingkupAktivitas?: string;
+  rerataFrekuensi?: string | number;
+  daftarKomoditas?: string;
+  tempatKarantina?: string;
+  statusKepemilikan?: string;
+  nomorRegistrasi?: string;
+  tanggalRegistrasi?: string;
+  statusBlokir?: string;
+  isRegistryEntry?: boolean;
 }
 
 interface ServerStorageSchema {
@@ -257,9 +273,9 @@ function loadServerStorage(): ServerStorageSchema {
       {
         id: 'init-1',
         timestamp: new Date().toISOString(),
-        actionType: 'SINKRONISASI',
+        actionType: 'SISTEM',
         title: 'Inisialisasi Sistem Q-BIOCHECK',
-        description: 'Sistem database BBKHIT DKI Jakarta berhasil diinisialisasi dan tersinkronisasi.',
+        description: 'Sistem database BBKHIT DKI Jakarta berhasil diinisialisasi.',
         recordsAffected: initialRecords.length,
         officerName: 'Sistem Q-BIOCHECK',
       },
@@ -272,17 +288,24 @@ function loadServerStorage(): ServerStorageSchema {
 }
 
 function saveServerStorage(data: ServerStorageSchema): boolean {
+  let tmpFile = '';
   try {
     const dir = path.dirname(STORAGE_FILE);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const tmpFile = `${STORAGE_FILE}.tmp`;
+    const uniqueSuffix = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
+    tmpFile = `${STORAGE_FILE}.${uniqueSuffix}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(data), 'utf-8');
     fs.renameSync(tmpFile, STORAGE_FILE);
     return true;
   } catch (err) {
-    console.error('Error writing server_storage.json:', err);
+    console.warn('Warning writing server_storage.json (falling back cleanly to memory/Cloud):', err);
+    if (tmpFile && fs.existsSync(tmpFile)) {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (_) {}
+    }
     return false;
   }
 }
@@ -290,7 +313,9 @@ function saveServerStorage(data: ServerStorageSchema): boolean {
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  httpServer.requestTimeout = 180_000;
   const PORT = 3000;
 
   // Support massive datasets up to 200MB (supporting tens of thousands of Excel records)
@@ -305,63 +330,16 @@ async function startServer() {
     next();
   });
 
-  // In-memory cache synced with disk
+  // In-memory cache persisted to disk
   let memoryStore = loadServerStorage();
 
-  wss.on('connection', (ws) => {
-    try {
-      ws.send(
-        JSON.stringify({
-          type: 'connected',
-          version: memoryStore.version,
-          updatedAt: memoryStore.updatedAt,
-          totalRecords: memoryStore.records.length,
-        })
-      );
-    } catch (_) {}
-
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(String(raw));
-        if (msg?.type === 'hello' && Number(msg.version) < memoryStore.version) {
-          ws.send(
-            JSON.stringify({
-              type: 'store:updated',
-              version: memoryStore.version,
-              updatedAt: memoryStore.updatedAt,
-              area: 'resync',
-              totalRecords: memoryStore.records.length,
-            })
-          );
-        }
-      } catch (_) {}
-    });
-  });
-
-  function commitAndBroadcast(area: string, meta?: Record<string, any>) {
+  function commitServerStorage() {
     memoryStore.version = (Number(memoryStore.version) || 0) + 1;
     memoryStore.updatedAt = new Date().toISOString();
     const saved = saveServerStorage(memoryStore);
     if (!saved) {
-      throw new Error('Gagal menulis penyimpanan permanen ke server disk.');
+      console.warn('Server disk write skipped/failed; in-memory & Cloud state remain intact.');
     }
-
-    const payload = JSON.stringify({
-      type: 'store:updated',
-      version: memoryStore.version,
-      updatedAt: memoryStore.updatedAt,
-      totalRecords: memoryStore.records.length,
-      area,
-      ...(meta || {}),
-    });
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        try {
-          client.send(payload);
-        } catch (_) {}
-      }
-    });
   }
 
   // API Health Endpoint
@@ -396,7 +374,7 @@ async function startServer() {
   app.post('/api/custom-logo', (req, res) => {
     const { logo } = req.body;
     memoryStore.customLogo = logo || null;
-    commitAndBroadcast('custom-logo');
+    commitServerStorage();
     res.json({
       success: true,
       logo: memoryStore.customLogo,
@@ -407,20 +385,82 @@ async function startServer() {
 
   // POST update records (full replace when explicitly requested)
   app.post('/api/records', (req, res) => {
-    const { records } = req.body;
-    if (!Array.isArray(records)) {
-      return res.status(400).json({ error: 'Body parameter records must be an array.' });
+    try {
+      const { records, slim } = req.body || {};
+      if (!Array.isArray(records)) {
+        return res.status(400).json({ error: 'Body parameter records must be an array.' });
+      }
+
+      memoryStore.records = records;
+      commitServerStorage();
+
+      res.json({
+        success: true,
+        version: memoryStore.version,
+        count: memoryStore.records.length,
+        updatedAt: memoryStore.updatedAt,
+        ...(slim ? {} : {}),
+      });
+    } catch (err: any) {
+      console.error('Error in /api/records:', err);
+      res.status(500).json({ error: err?.message || 'Gagal menyimpan records ke server.' });
     }
+  });
 
-    memoryStore.records = records;
-    commitAndBroadcast('records');
+  // Chunked mirror sync endpoint so massive Excel imports never trigger Cloud Run gateway 500/413
+  app.post('/api/records/sync-chunk', (req, res) => {
+    try {
+      const { records: chunk, chunkIndex, totalChunks, log } = req.body || {};
+      if (!Array.isArray(chunk)) {
+        return res.status(400).json({ error: 'Body parameter records must be an array.' });
+      }
+      const idx = Math.max(0, Number(chunkIndex) || 0);
+      const total = Math.max(1, Number(totalChunks) || 1);
 
-    res.json({
-      success: true,
-      version: memoryStore.version,
-      count: memoryStore.records.length,
-      updatedAt: memoryStore.updatedAt,
-    });
+      if (idx === 0) {
+        memoryStore.records = [...chunk];
+      } else {
+        memoryStore.records = [...memoryStore.records, ...chunk];
+      }
+
+      if (log && typeof log === 'object' && idx >= total - 1) {
+        if (!Array.isArray(memoryStore.updateLogs)) {
+          memoryStore.updateLogs = [];
+        }
+        const exists = memoryStore.updateLogs.some((l: any) => l?.id === log.id);
+        if (!exists) {
+          memoryStore.updateLogs.unshift({
+            id: log.id || `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            timestamp: log.timestamp || new Date().toISOString(),
+            actionType: log.actionType || 'SISTEM',
+            title: log.title || 'Pembaruan Data',
+            description: log.description || '',
+            recordsAffected: Number(log.recordsAffected) || 0,
+            officerName: log.officerName || 'Petugas BBKHIT DKI Jakarta',
+            metadata: log.metadata || {},
+          });
+          if (memoryStore.updateLogs.length > 200) {
+            memoryStore.updateLogs = memoryStore.updateLogs.slice(0, 200);
+          }
+        }
+      }
+
+      if (idx >= total - 1) {
+        commitServerStorage();
+      }
+
+      res.json({
+        success: true,
+        chunkIndex: idx,
+        totalChunks: total,
+        version: memoryStore.version,
+        count: memoryStore.records.length,
+        updatedAt: memoryStore.updatedAt,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/records/sync-chunk:', err);
+      res.status(500).json({ error: err?.message || 'Gagal menyelaraskan potongan data.' });
+    }
   });
 
   // POST append records without resetting or losing previously uploaded data
@@ -437,6 +477,49 @@ async function startServer() {
       memoryStore.updateLogs = [];
     }
 
+    // Helper: deduplicate comma/semicolon-separated strings additively
+    const mergeListStrings = (existingVal?: string, incomingVal?: string): string => {
+      const result: string[] = [];
+      const seen = new Set<string>();
+      const push = (raw?: string) => {
+        if (!raw) return;
+        const parts = String(raw)
+          .split(/[,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const p of parts) {
+          const k = p.toUpperCase();
+          if (!seen.has(k)) {
+            seen.add(k);
+            result.push(p);
+          }
+        }
+      };
+      push(existingVal);
+      push(incomingVal);
+      return result.join(', ');
+    };
+
+    const addFreqValues = (aRaw?: string | number, bRaw?: string | number): string | number | undefined => {
+      const parseN = (v?: string | number): number | null => {
+        if (v === undefined || v === null) return null;
+        const s = String(v).trim().replace(',', '.');
+        if (!s) return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+      const a = parseN(aRaw);
+      const b = parseN(bRaw);
+      if (a !== null && b !== null) {
+        const sum = a + b;
+        return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
+      }
+      if (b !== null) return b;
+      if (a !== null) return a;
+      const fb = String(bRaw ?? aRaw ?? '').trim();
+      return fb || undefined;
+    };
+
     // Map existing core names so variations map to the same canonical company name,
     // while preserving multi-category (HEWAN/IKAN/TUMBUHAN) and multi-activity records
     const coreToExistingName = new Map<string, string>();
@@ -448,7 +531,15 @@ async function startServer() {
         coreToExistingName.set(core, rawName);
       }
     }
+    for (const [k, c] of Object.entries(memoryStore.companyContacts)) {
+      const rawName = String(c.namaPerusahaan || c.companyName || '').trim().toUpperCase();
+      const core = cleanCompanyCore(rawName) || k;
+      if (core && rawName && !coreToExistingName.has(core)) {
+        coreToExistingName.set(core, rawName);
+      }
+    }
 
+    const nowIso = new Date().toISOString();
     const processedNew = incomingRecords.map((newR: any, idx: number) => {
       const rawName = (newR.pemohon || '').trim().toUpperCase();
       const core = cleanCompanyCore(rawName);
@@ -463,15 +554,37 @@ async function startServer() {
 
       const pemilikVal = String(newR.pemilik || '').trim();
       const emailVal = String(newR.email || '').trim();
+      const contactKey = core || canonicalComp;
+      const existingContact = memoryStore.companyContacts![contactKey];
 
-      if (canonicalComp && (pemilikVal || emailVal)) {
-        const contactKey = core || canonicalComp;
-        const existingContact = memoryStore.companyContacts![contactKey];
+      if (canonicalComp && (existingContact || pemilikVal || emailVal)) {
+        const recActivity = String(newR.jenisKegiatan || newR.lingkupAktivitas || '').trim();
+        const recCommodity = String(newR.komoditas || '').trim();
+        const recSite = Array.isArray(newR.tempatPeriksa)
+          ? newR.tempatPeriksa.join(', ')
+          : String(newR.tempatPeriksaRaw || '').trim();
+        const recFreq = typeof newR.frekuensi === 'number' && Number.isFinite(newR.frekuensi) ? newR.frekuensi : 1;
+
         memoryStore.companyContacts![contactKey] = {
-          companyName: canonicalComp,
-          pemilik: pemilikVal || existingContact?.pemilik || '',
-          email: emailVal || existingContact?.email || '',
-          updatedAt: new Date().toISOString(),
+          ...(existingContact || {}),
+          companyName: existingContact?.companyName || canonicalComp,
+          namaPerusahaan: existingContact?.namaPerusahaan || existingContact?.companyName || canonicalComp,
+          pemilik: existingContact?.pemilik || pemilikVal || '',
+          namaPemohon: existingContact?.namaPemohon || existingContact?.pemilik || pemilikVal || '',
+          email: existingContact?.email || emailVal || '',
+          ...(existingContact?.lingkupAktivitas || recActivity
+            ? { lingkupAktivitas: mergeListStrings(existingContact?.lingkupAktivitas, recActivity) }
+            : {}),
+          ...(existingContact?.daftarKomoditas || recCommodity
+            ? { daftarKomoditas: mergeListStrings(existingContact?.daftarKomoditas, recCommodity) }
+            : {}),
+          ...(existingContact?.tempatKarantina || recSite
+            ? { tempatKarantina: mergeListStrings(existingContact?.tempatKarantina, recSite) }
+            : {}),
+          ...(existingContact?.rerataFrekuensi !== undefined
+            ? { rerataFrekuensi: addFreqValues(existingContact.rerataFrekuensi, recFreq) }
+            : {}),
+          updatedAt: nowIso,
         };
       }
 
@@ -480,8 +593,8 @@ async function startServer() {
         id: newR.id || `imp-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
         pemohon: canonicalComp,
         kategori: category,
-        pemilik: pemilikVal || memoryStore.companyContacts![core || canonicalComp]?.pemilik || '',
-        email: emailVal || memoryStore.companyContacts![core || canonicalComp]?.email || '',
+        pemilik: pemilikVal || memoryStore.companyContacts![contactKey]?.pemilik || '',
+        email: emailVal || memoryStore.companyContacts![contactKey]?.email || '',
       };
     });
 
@@ -512,7 +625,7 @@ async function startServer() {
       memoryStore.updateLogs = memoryStore.updateLogs.slice(0, 200);
     }
 
-    commitAndBroadcast('records-append', { addedCount: processedNew.length });
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -526,11 +639,26 @@ async function startServer() {
     });
   });
 
+  // POST verify passcode for Menu Aksi & Excel Import authorization (keeps passcode strictly server-side)
+  app.post('/api/auth/verify-action-passcode', (req, res) => {
+    const { passcode, context } = req.body || {};
+    if (String(passcode || '').trim() !== DELETE_PASSCODE) {
+      return res.status(403).json({
+        valid: false,
+        error:
+          context === 'excel_import'
+            ? 'Password salah. Masukkan password petugas yang benar untuk penambahan impor Excel.'
+            : 'Password salah. Masukkan sandi yang benar untuk membuka Menu Aksi.',
+      });
+    }
+    res.json({ valid: true });
+  });
+
   // POST selective clear records (requires deletion passcode)
   app.post('/api/records/clear-selective', (req, res) => {
     const { activity, category, passcode } = req.body || {};
 
-    if (String(passcode || '') !== DELETE_PASSCODE) {
+    if (String(passcode || '').trim() !== DELETE_PASSCODE) {
       return res.status(403).json({
         error: 'Kode atau sandi penghapusan data salah. Penghapusan permanen dibatalkan.',
       });
@@ -581,7 +709,7 @@ async function startServer() {
       }
     }
 
-    commitAndBroadcast('records-clear', { deletedCount });
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -599,9 +727,133 @@ async function startServer() {
     res.json(memoryStore.companyContacts || {});
   });
 
+  // Shared helpers for additive company registry merging
+  const mergeCompanyDelimited = (existingVal?: string, incomingVal?: string): string => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const add = (raw?: string) => {
+      if (!raw) return;
+      for (const part of String(raw).split(/[,;\n]+/)) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        const key = trimmed.toUpperCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push(trimmed);
+        }
+      }
+    };
+    add(existingVal);
+    add(incomingVal);
+    return out.join(', ');
+  };
+
+  const sumCompanyFreq = (
+    existingVal?: string | number,
+    incomingVal?: string | number
+  ): string | number | undefined => {
+    const parseNum = (v?: string | number): number | null => {
+      if (v === undefined || v === null) return null;
+      const s = String(v).trim().replace(',', '.');
+      if (!s) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    };
+    const a = parseNum(existingVal);
+    const b = parseNum(incomingVal);
+    if (a !== null && b !== null) {
+      const sum = a + b;
+      return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
+    }
+    if (b !== null) return b;
+    if (a !== null) return a;
+    const fb = String(incomingVal ?? existingVal ?? '').trim();
+    return fb || undefined;
+  };
+
+  const buildRecordCompanyBaselineMap = (targetCores?: Set<string>) => {
+    const map = new Map<
+      string,
+      {
+        canonicalName: string;
+        pemilik: string;
+        email: string;
+        jenisPerusahaan: string;
+        identitas: string;
+        statusKepemilikan: string;
+        tanggalRegistrasi: string;
+        statusBlokir: string;
+        activities: Set<string>;
+        commodities: Set<string>;
+        sites: Set<string>;
+        freqSum: number;
+        freqCount: number;
+        recordCount: number;
+      }
+    >();
+    for (const r of memoryStore.records) {
+      const rawName = (r.pemohon || '').trim().toUpperCase();
+      if (!rawName) continue;
+      const rCore = cleanCompanyCore(rawName) || rawName;
+      if (targetCores && !targetCores.has(rCore)) continue;
+
+      let agg = map.get(rCore);
+      if (!agg) {
+        agg = {
+          canonicalName: rawName,
+          pemilik: '',
+          email: '',
+          jenisPerusahaan: '',
+          identitas: '',
+          statusKepemilikan: '',
+          tanggalRegistrasi: '',
+          statusBlokir: '',
+          activities: new Set<string>(),
+          commodities: new Set<string>(),
+          sites: new Set<string>(),
+          freqSum: 0,
+          freqCount: 0,
+          recordCount: 0,
+        };
+        map.set(rCore, agg);
+      }
+      if (rawName.length > agg.canonicalName.length) agg.canonicalName = rawName;
+      agg.recordCount++;
+      if (r.jenisKegiatan) agg.activities.add(String(r.jenisKegiatan).trim());
+      if (r.lingkupAktivitas) {
+        String(r.lingkupAktivitas)
+          .split(/[,;/]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .forEach((s) => agg!.activities.add(s));
+      }
+      if (r.komoditas) agg.commodities.add(String(r.komoditas).trim());
+      if (Array.isArray(r.tempatPeriksa)) {
+        r.tempatPeriksa.forEach((s: string) => {
+          if (s && s.trim()) agg!.sites.add(s.trim());
+        });
+      } else if (r.tempatPeriksaRaw && String(r.tempatPeriksaRaw).trim()) {
+        agg.sites.add(String(r.tempatPeriksaRaw).trim());
+      }
+      if (!agg.pemilik && r.pemilik) agg.pemilik = String(r.pemilik).trim();
+      if (!agg.email && r.email) agg.email = String(r.email).trim();
+      if (!agg.jenisPerusahaan && r.jenisPerusahaan) agg.jenisPerusahaan = String(r.jenisPerusahaan).trim();
+      if (!agg.identitas && r.identitas) agg.identitas = String(r.identitas).trim();
+      if (!agg.statusKepemilikan && r.statusKepemilikan) agg.statusKepemilikan = String(r.statusKepemilikan).trim();
+      if (!agg.tanggalRegistrasi && r.tanggalRegistrasi) agg.tanggalRegistrasi = String(r.tanggalRegistrasi).trim();
+      if (!agg.statusBlokir && r.statusBlokir) agg.statusBlokir = String(r.statusBlokir).trim();
+      if (typeof r.frekuensi === 'number' && Number.isFinite(r.frekuensi)) {
+        agg.freqSum += r.frekuensi;
+        agg.freqCount++;
+      }
+    }
+    return map;
+  };
+
   app.post('/api/company-contacts', (req, res) => {
-    const { companyName, pemilik, email } = req.body;
-    if (!companyName || typeof companyName !== 'string') {
+    const body = req.body || {};
+    const rawCompanyName = body.companyName || body.namaPerusahaan;
+    if (!rawCompanyName || typeof rawCompanyName !== 'string') {
       return res.status(400).json({ error: 'companyName wajib diisi.' });
     }
 
@@ -609,18 +861,131 @@ async function startServer() {
       memoryStore.companyContacts = {};
     }
 
-    const cleanName = companyName.trim().toUpperCase();
+    const mode: 'create' | 'edit' = body.mode === 'edit' ? 'edit' : 'create';
+    const cleanName = rawCompanyName.trim().toUpperCase();
     const coreKey = cleanCompanyCore(cleanName) || cleanName;
-    const cleanPemilik = String(pemilik || '').trim();
-    const cleanEmail = String(email || '').trim();
+    const existingContact = memoryStore.companyContacts[coreKey];
     const now = new Date().toISOString();
 
-    memoryStore.companyContacts[coreKey] = {
-      companyName: cleanName,
-      pemilik: cleanPemilik,
-      email: cleanEmail,
-      updatedAt: now,
-    };
+    let merged: CompanyContactRecord;
+
+    if (mode === 'edit') {
+      const cleanPemilik = String(body.pemilik ?? body.namaPemohon ?? existingContact?.pemilik ?? '').trim();
+      const cleanEmail = String(body.email ?? existingContact?.email ?? '').trim();
+
+      merged = {
+        ...(existingContact || {}),
+        companyName: cleanName,
+        pemilik: cleanPemilik,
+        email: cleanEmail,
+        updatedAt: now,
+      };
+
+      const strFields: Array<keyof CompanyContactRecord> = [
+        'namaPemohon',
+        'jenisPerusahaan',
+        'namaPerusahaan',
+        'identitas',
+        'nomorIdentitas',
+        'nitku',
+        'uptRegistrasi',
+        'lingkupAktivitas',
+        'daftarKomoditas',
+        'tempatKarantina',
+        'statusKepemilikan',
+        'nomorRegistrasi',
+        'tanggalRegistrasi',
+        'statusBlokir',
+      ];
+      for (const f of strFields) {
+        if (body[f] !== undefined) {
+          const val = String(body[f] ?? '').trim();
+          if (val) (merged as any)[f] = val;
+          else delete (merged as any)[f];
+        }
+      }
+      if (body.namaPemohon === undefined && cleanPemilik) {
+        merged.namaPemohon = cleanPemilik;
+      }
+      if (!merged.namaPerusahaan) {
+        merged.namaPerusahaan = cleanName;
+      }
+      if (body.rerataFrekuensi !== undefined && String(body.rerataFrekuensi).trim() !== '') {
+        merged.rerataFrekuensi = body.rerataFrekuensi;
+      }
+    } else {
+      // Additive mode: merge onto existing contact AND derived Profil Perusahaan baseline
+      const recAggMap = buildRecordCompanyBaselineMap(new Set([coreKey]));
+      const recAgg = recAggMap.get(coreKey);
+      const baseFreq =
+        existingContact?.rerataFrekuensi !== undefined && String(existingContact.rerataFrekuensi).trim() !== ''
+          ? existingContact.rerataFrekuensi
+          : recAgg
+            ? recAgg.freqCount > 0
+              ? Math.round(recAgg.freqSum / recAgg.freqCount)
+              : recAgg.recordCount
+            : undefined;
+      const baseActivities = existingContact?.lingkupAktivitas || (recAgg ? Array.from(recAgg.activities).join(', ') : '');
+      const baseCommodities = existingContact?.daftarKomoditas || (recAgg ? Array.from(recAgg.commodities).join(', ') : '');
+      const baseSites = existingContact?.tempatKarantina || (recAgg ? Array.from(recAgg.sites).join(', ') : '');
+      const basePemilik = existingContact?.namaPemohon || existingContact?.pemilik || recAgg?.pemilik || '';
+      const baseEmail = existingContact?.email || recAgg?.email || '';
+      const canonicalComp = existingContact?.namaPerusahaan || existingContact?.companyName || recAgg?.canonicalName || cleanName;
+
+      const inPemilik = String(body.namaPemohon ?? body.pemilik ?? '').trim();
+      const inEmail = String(body.email ?? '').trim();
+      const finalPemilik = basePemilik || inPemilik;
+      const finalEmail = baseEmail || inEmail;
+
+      merged = {
+        ...(existingContact || {}),
+        companyName: canonicalComp,
+        namaPerusahaan: canonicalComp,
+        pemilik: finalPemilik,
+        namaPemohon: finalPemilik,
+        email: finalEmail,
+        updatedAt: now,
+      };
+
+      const singleFillFields: Array<keyof CompanyContactRecord> = [
+        'jenisPerusahaan',
+        'identitas',
+        'nomorIdentitas',
+        'nitku',
+        'uptRegistrasi',
+        'statusKepemilikan',
+        'nomorRegistrasi',
+        'tanggalRegistrasi',
+        'statusBlokir',
+      ];
+      for (const f of singleFillFields) {
+        const existingVal = String((existingContact as any)?.[f] || (recAgg as any)?.[f] || '').trim();
+        const incomingVal = String(body[f] ?? '').trim();
+        const chosen = existingVal || incomingVal;
+        if (chosen) (merged as any)[f] = chosen;
+      }
+
+      const mergedAct = mergeCompanyDelimited(baseActivities, body.lingkupAktivitas);
+      if (mergedAct) merged.lingkupAktivitas = mergedAct;
+      const mergedComm = mergeCompanyDelimited(baseCommodities, body.daftarKomoditas);
+      if (mergedComm) merged.daftarKomoditas = mergedComm;
+      const mergedSites = mergeCompanyDelimited(baseSites, body.tempatKarantina);
+      if (mergedSites) merged.tempatKarantina = mergedSites;
+
+      const sumFreq = sumCompanyFreq(baseFreq, body.rerataFrekuensi);
+      if (sumFreq !== undefined) merged.rerataFrekuensi = sumFreq;
+    }
+
+    if (body.no !== undefined && Number.isFinite(Number(body.no))) {
+      merged.no = Number(body.no);
+    }
+    if (body.isRegistryEntry === true || existingContact?.isRegistryEntry === true) {
+      merged.isRegistryEntry = true;
+    }
+
+    memoryStore.companyContacts[coreKey] = merged;
+    const cleanPemilikOut = merged.pemilik || '';
+    const cleanEmailOut = merged.email || '';
 
     // Propagate to matching records so exports & records stay aligned
     let matchedCount = 0;
@@ -630,8 +995,14 @@ async function startServer() {
         matchedCount++;
         return {
           ...r,
-          pemilik: cleanPemilik,
-          email: cleanEmail,
+          pemilik: cleanPemilikOut || r.pemilik || '',
+          email: cleanEmailOut || r.email || '',
+          ...(merged.jenisPerusahaan ? { jenisPerusahaan: merged.jenisPerusahaan } : {}),
+          ...(merged.identitas ? { identitas: merged.identitas } : {}),
+          ...(merged.lingkupAktivitas ? { lingkupAktivitas: merged.lingkupAktivitas } : {}),
+          ...(merged.statusKepemilikan ? { statusKepemilikan: merged.statusKepemilikan } : {}),
+          ...(merged.tanggalRegistrasi ? { tanggalRegistrasi: merged.tanggalRegistrasi } : {}),
+          ...(merged.statusBlokir ? { statusBlokir: merged.statusBlokir } : {}),
         };
       }
       return r;
@@ -644,13 +1015,13 @@ async function startServer() {
       id: `contact-${Date.now()}`,
       timestamp: now,
       actionType: 'KONTAK_PERUSAHAAN',
-      title: `Pembaruan Profil Kontak: ${cleanName}`,
-      description: `Memperbarui Pemilik (${cleanPemilik || '-'}) dan Email (${cleanEmail || '-'}) untuk ${cleanName}.`,
+      title: `Pembaruan Data Perusahaan: ${merged.namaPerusahaan || cleanName}`,
+      description: `Memperbarui profil & kontak (${cleanPemilikOut || '-'} / ${cleanEmailOut || '-'}) untuk ${merged.namaPerusahaan || cleanName}.`,
       recordsAffected: matchedCount || 1,
       officerName: 'Petugas BBKHIT DKI Jakarta',
     });
 
-    commitAndBroadcast('company-contacts');
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -664,72 +1035,268 @@ async function startServer() {
   });
 
   app.post('/api/company-contacts/bulk', (req, res) => {
-    const { items } = req.body;
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Daftar items kontak perusahaan wajib diisi.' });
-    }
+    try {
+      const { items, slim, skipLog, skipDiskWrite } = req.body || {};
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Daftar items data perusahaan wajib diisi.' });
+      }
 
+      if (!memoryStore.companyContacts) {
+        memoryStore.companyContacts = {};
+      }
+
+      const now = new Date().toISOString();
+      const updatedKeys = new Set<string>();
+      const targetCores = new Set<string>();
+
+      for (const item of items) {
+        const rawName = String(item.companyName || item.namaPerusahaan || '').trim().toUpperCase();
+        if (!rawName) continue;
+        targetCores.add(cleanCompanyCore(rawName) || rawName);
+      }
+
+      // O(R) single scan across memoryStore.records only for imported companies
+      const recAggMap = buildRecordCompanyBaselineMap(targetCores);
+
+      interface TokenAcc {
+        set: Set<string>;
+        list: string[];
+      }
+      const createAcc = (seed?: string): TokenAcc => {
+        const acc: TokenAcc = { set: new Set<string>(), list: [] };
+        if (seed) pushAcc(acc, seed);
+        return acc;
+      };
+      const pushAcc = (acc: TokenAcc, raw?: string) => {
+        if (!raw) return;
+        for (const part of String(raw).split(/[,;\n]+/)) {
+          const trimmed = part.trim();
+          if (!trimmed) continue;
+          const k = trimmed.toUpperCase();
+          if (!acc.set.has(k)) {
+            acc.set.add(k);
+            acc.list.push(trimmed);
+          }
+        }
+      };
+
+      const companyAcc = new Map<
+        string,
+        {
+          merged: CompanyContactRecord;
+          act: TokenAcc;
+          comm: TokenAcc;
+          sites: TokenAcc;
+          freq: string | number | undefined;
+        }
+      >();
+
+      const singleFillFields: Array<keyof CompanyContactRecord> = [
+        'jenisPerusahaan',
+        'identitas',
+        'nomorIdentitas',
+        'nitku',
+        'uptRegistrasi',
+        'statusKepemilikan',
+        'nomorRegistrasi',
+        'tanggalRegistrasi',
+        'statusBlokir',
+      ];
+
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
+        const rawName = String(item.companyName || item.namaPerusahaan || '').trim().toUpperCase();
+        if (!rawName) continue;
+        const coreKey = cleanCompanyCore(rawName) || rawName;
+        let acc = companyAcc.get(coreKey);
+
+        if (!acc) {
+          const existing = memoryStore.companyContacts![coreKey];
+          const recAgg = recAggMap.get(coreKey);
+          const baseFreq =
+            existing?.rerataFrekuensi !== undefined && String(existing.rerataFrekuensi).trim() !== ''
+              ? existing.rerataFrekuensi
+              : recAgg
+                ? recAgg.freqCount > 0
+                  ? Math.round(recAgg.freqSum / recAgg.freqCount)
+                  : recAgg.recordCount
+                : undefined;
+          const baseActivities = existing?.lingkupAktivitas || (recAgg ? Array.from(recAgg.activities).join(', ') : '');
+          const baseCommodities = existing?.daftarKomoditas || (recAgg ? Array.from(recAgg.commodities).join(', ') : '');
+          const baseSites = existing?.tempatKarantina || (recAgg ? Array.from(recAgg.sites).join(', ') : '');
+          const canonicalName = existing?.namaPerusahaan || existing?.companyName || recAgg?.canonicalName || rawName;
+          const pemilik = existing?.pemilik || recAgg?.pemilik || '';
+          const email = existing?.email || recAgg?.email || '';
+
+          const baseRecord: CompanyContactRecord = {
+            ...(existing || {}),
+            companyName: canonicalName,
+            namaPerusahaan: canonicalName,
+            pemilik,
+            namaPemohon: existing?.namaPemohon || pemilik,
+            email,
+            updatedAt: now,
+          };
+          for (const f of singleFillFields) {
+            const prevVal = String((existing as any)?.[f] || (recAgg as any)?.[f] || '').trim();
+            if (prevVal) (baseRecord as any)[f] = prevVal;
+          }
+          if (existing?.no !== undefined) baseRecord.no = existing.no;
+          if (existing?.isRegistryEntry === true) baseRecord.isRegistryEntry = true;
+
+          acc = {
+            merged: baseRecord,
+            act: createAcc(baseActivities),
+            comm: createAcc(baseCommodities),
+            sites: createAcc(baseSites),
+            freq: baseFreq,
+          };
+          companyAcc.set(coreKey, acc);
+        }
+
+        const inPemilik = String(item.namaPemohon ?? item.pemilik ?? '').trim();
+        const inEmail = String(item.email ?? '').trim();
+        if (!acc.merged.pemilik && inPemilik) {
+          acc.merged.pemilik = inPemilik;
+          acc.merged.namaPemohon = acc.merged.namaPemohon || inPemilik;
+        }
+        if (!acc.merged.email && inEmail) acc.merged.email = inEmail;
+
+        for (const f of singleFillFields) {
+          if (!(acc.merged as any)[f]) {
+            const inVal = String(item[f] ?? '').trim();
+            if (inVal) (acc.merged as any)[f] = inVal;
+          }
+        }
+
+        pushAcc(acc.act, item.lingkupAktivitas);
+        pushAcc(acc.comm, item.daftarKomoditas);
+        pushAcc(acc.sites, item.tempatKarantina);
+        acc.freq = sumCompanyFreq(acc.freq, item.rerataFrekuensi);
+
+        if (acc.merged.no === undefined && item.no !== undefined && Number.isFinite(Number(item.no))) {
+          acc.merged.no = Number(item.no);
+        }
+        if (item.isRegistryEntry === true) {
+          acc.merged.isRegistryEntry = true;
+        }
+        updatedKeys.add(coreKey);
+      }
+
+      companyAcc.forEach((acc, coreKey) => {
+        if (acc.act.list.length > 0) acc.merged.lingkupAktivitas = acc.act.list.join(', ');
+        if (acc.comm.list.length > 0) acc.merged.daftarKomoditas = acc.comm.list.join(', ');
+        if (acc.sites.list.length > 0) acc.merged.tempatKarantina = acc.sites.list.join(', ');
+        if (acc.freq !== undefined) acc.merged.rerataFrekuensi = acc.freq;
+        memoryStore.companyContacts![coreKey] = acc.merged;
+      });
+
+      let matchedRecordsCount = 0;
+      memoryStore.records = memoryStore.records.map((r) => {
+        const rCore = cleanCompanyCore(r.pemohon || '') || (r.pemohon || '').trim().toUpperCase();
+        if (updatedKeys.has(rCore) && memoryStore.companyContacts![rCore]) {
+          matchedRecordsCount++;
+          const info = memoryStore.companyContacts![rCore];
+          return {
+            ...r,
+            pemilik: info.pemilik || r.pemilik || '',
+            email: info.email || r.email || '',
+            ...(info.jenisPerusahaan ? { jenisPerusahaan: info.jenisPerusahaan } : {}),
+            ...(info.identitas ? { identitas: info.identitas } : {}),
+            ...(info.lingkupAktivitas ? { lingkupAktivitas: info.lingkupAktivitas } : {}),
+            ...(info.statusKepemilikan ? { statusKepemilikan: info.statusKepemilikan } : {}),
+            ...(info.tanggalRegistrasi ? { tanggalRegistrasi: info.tanggalRegistrasi } : {}),
+            ...(info.statusBlokir ? { statusBlokir: info.statusBlokir } : {}),
+          };
+        }
+        return r;
+      });
+
+      if (!skipLog) {
+        if (!Array.isArray(memoryStore.updateLogs)) {
+          memoryStore.updateLogs = [];
+        }
+        memoryStore.updateLogs.unshift({
+          id: `bulk-contact-${Date.now()}`,
+          timestamp: now,
+          actionType: 'KONTAK_PERUSAHAAN',
+          title: `Impor Data Perusahaan: ${updatedKeys.size} Perusahaan`,
+          description: `Berhasil menambahkan/menggabungkan profil & registrasi untuk ${updatedKeys.size} perusahaan (${matchedRecordsCount} transaksi terkait ikut diperbarui).`,
+          recordsAffected: updatedKeys.size,
+          officerName: 'Petugas BBKHIT DKI Jakarta',
+        });
+        if (memoryStore.updateLogs.length > 200) {
+          memoryStore.updateLogs = memoryStore.updateLogs.slice(0, 200);
+        }
+      }
+
+      if (!skipDiskWrite) {
+        commitServerStorage();
+      }
+
+      res.json({
+        success: true,
+        version: memoryStore.version,
+        importedCount: updatedKeys.size,
+        matchedRecordsCount,
+        ...(slim
+          ? {}
+          : {
+              companyContacts: memoryStore.companyContacts,
+              records: memoryStore.records,
+              updateLogs: memoryStore.updateLogs,
+            }),
+        updatedAt: memoryStore.updatedAt,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/company-contacts/bulk:', err);
+      res.status(500).json({ error: err?.message || 'Gagal mengimpor data perusahaan ke server.' });
+    }
+  });
+
+  // POST clear ONLY Data Perusahaan table entries without touching Profil Perusahaan/Komoditas/Negara
+  app.post('/api/company-contacts/clear-registry', (_req, res) => {
     if (!memoryStore.companyContacts) {
       memoryStore.companyContacts = {};
     }
+    const nextContacts: Record<string, CompanyContactRecord> = {};
+    let clearedCount = 0;
 
-    const now = new Date().toISOString();
-    const updatedKeys = new Set<string>();
-
-    items.forEach((item: any) => {
-      const rawName = String(item.companyName || '').trim().toUpperCase();
-      if (!rawName) return;
-      const coreKey = cleanCompanyCore(rawName) || rawName;
-      const existing = memoryStore.companyContacts![coreKey];
-      const pemilik = String(item.pemilik || '').trim() || existing?.pemilik || '';
-      const email = String(item.email || '').trim() || existing?.email || '';
-
-      memoryStore.companyContacts![coreKey] = {
-        companyName: existing?.companyName || rawName,
-        pemilik,
-        email,
-        updatedAt: now,
-      };
-      updatedKeys.add(coreKey);
-    });
-
-    let matchedRecordsCount = 0;
-    memoryStore.records = memoryStore.records.map((r) => {
-      const rCore = cleanCompanyCore(r.pemohon || '') || (r.pemohon || '').trim().toUpperCase();
-      if (updatedKeys.has(rCore) && memoryStore.companyContacts![rCore]) {
-        matchedRecordsCount++;
-        const info = memoryStore.companyContacts![rCore];
-        return {
-          ...r,
-          pemilik: info.pemilik || r.pemilik || '',
-          email: info.email || r.email || '',
+    for (const [key, info] of Object.entries(memoryStore.companyContacts)) {
+      if (info.isRegistryEntry) {
+        clearedCount++;
+      }
+      if (info.pemilik || info.email) {
+        nextContacts[key] = {
+          companyName: info.companyName,
+          pemilik: info.pemilik || '',
+          email: info.email || '',
+          updatedAt: new Date().toISOString(),
         };
       }
-      return r;
-    });
+    }
 
+    memoryStore.companyContacts = nextContacts;
     if (!Array.isArray(memoryStore.updateLogs)) {
       memoryStore.updateLogs = [];
     }
     memoryStore.updateLogs.unshift({
-      id: `bulk-contact-${Date.now()}`,
-      timestamp: now,
+      id: `clear-reg-${Date.now()}`,
+      timestamp: new Date().toISOString(),
       actionType: 'KONTAK_PERUSAHAAN',
-      title: `Impor CSV/Excel Pemilik & Email: ${updatedKeys.size} Perusahaan`,
-      description: `Berhasil memperbarui data Pemilik & Alamat Email untuk ${updatedKeys.size} perusahaan (${matchedRecordsCount} transaksi terkait ikut diperbarui).`,
-      recordsAffected: updatedKeys.size,
+      title: 'Kosongkan Tabel Data Perusahaan',
+      description: `Mengosongkan ${clearedCount} baris pada menu Data Perusahaan tanpa menghapus data Profil Perusahaan, Komoditas, dan Negara.`,
+      recordsAffected: clearedCount,
       officerName: 'Petugas BBKHIT DKI Jakarta',
     });
 
-    commitAndBroadcast('company-contacts-bulk');
+    commitServerStorage();
 
     res.json({
       success: true,
       version: memoryStore.version,
-      importedCount: updatedKeys.size,
-      matchedRecordsCount,
+      clearedCount,
       companyContacts: memoryStore.companyContacts,
-      records: memoryStore.records,
       updateLogs: memoryStore.updateLogs,
       updatedAt: memoryStore.updatedAt,
     });
@@ -769,7 +1336,7 @@ async function startServer() {
       }
     }
 
-    commitAndBroadcast('compliance');
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -810,7 +1377,7 @@ async function startServer() {
       }
     }
 
-    commitAndBroadcast('watchlists');
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -841,7 +1408,7 @@ async function startServer() {
     const newLog = {
       id: log.id || `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       timestamp: log.timestamp || new Date().toISOString(),
-      actionType: log.actionType || 'SINKRONISASI',
+      actionType: log.actionType || 'SISTEM',
       title: log.title || 'Pembaruan Data',
       description: log.description || '',
       recordsAffected: Number(log.recordsAffected) || 0,
@@ -855,7 +1422,7 @@ async function startServer() {
       memoryStore.updateLogs = memoryStore.updateLogs.slice(0, 200);
     }
 
-    commitAndBroadcast('update-logs');
+    commitServerStorage();
 
     res.json({
       success: true,
@@ -1040,7 +1607,7 @@ async function startServer() {
       }
       memoryStore.updateLogs.unshift(auditLog);
 
-      commitAndBroadcast('deduplicate-companies');
+      commitServerStorage();
 
       res.json({
         success: true,
@@ -1255,6 +1822,20 @@ Berikan output dalam format JSON MURNI (tanpa markdown backticks, tanpa text lai
     });
   });
 
+  // Global Express error handler so large/malformed requests never leak raw 500s
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const status = err?.status || err?.statusCode || 500;
+    console.error('Express API error:', err?.message || err);
+    if (!res.headersSent) {
+      res.status(status).json({
+        error:
+          err?.type === 'entity.too.large'
+            ? 'Ukuran paket permintaan melebihi batas server.'
+            : err?.message || 'Terjadi kesalahan internal pada server.',
+      });
+    }
+  });
+
   // Vite middleware for development vs static build in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -1274,7 +1855,7 @@ Berikan output dalam format JSON MURNI (tanpa markdown backticks, tanpa text lai
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server profiling karantina running on http://localhost:${PORT} (WebSocket /ws aktif)`);
+    console.log(`Server profiling karantina running on http://localhost:${PORT}`);
   });
 }
 

@@ -4,7 +4,7 @@ export type RiskLevel = 'SANGAT TINGGI' | 'TINGGI' | 'SEDANG' | 'RENDAH';
 
 export type TradeActivityType = 'EKSPOR' | 'IMPOR' | 'DOMESTIK MASUK' | 'DOMESTIK KELUAR';
 
-export type ActiveNavTab = 'dashboard' | 'applicant' | 'commodity' | 'country' | 'table';
+export type ActiveNavTab = 'dashboard' | 'applicant' | 'commodity' | 'country' | 'companies' | 'table';
 
 export interface MediaPembawaRecord {
   id: string;
@@ -38,6 +38,23 @@ export interface CompanyContactInfo {
   pemilik: string;
   email: string;
   updatedAt: string;
+  no?: number;
+  namaPemohon?: string;
+  jenisPerusahaan?: string;
+  namaPerusahaan?: string;
+  identitas?: string;
+  nomorIdentitas?: string;
+  nitku?: string;
+  uptRegistrasi?: string;
+  lingkupAktivitas?: string;
+  rerataFrekuensi?: string | number;
+  daftarKomoditas?: string;
+  tempatKarantina?: string;
+  statusKepemilikan?: string;
+  nomorRegistrasi?: string;
+  tanggalRegistrasi?: string;
+  statusBlokir?: string;
+  isRegistryEntry?: boolean;
 }
 
 export interface ApplicantProfile {
@@ -218,7 +235,7 @@ export type UpdateActionType =
   | 'PENILAIAN_SKOR'
   | 'PENGAWASAN_UTAMA'
   | 'KONTAK_PERUSAHAAN'
-  | 'SINKRONISASI';
+  | 'SISTEM';
 
 export interface DataUpdateLog {
   id: string;
@@ -229,14 +246,6 @@ export interface DataUpdateLog {
   recordsAffected: number;
   officerName: string;
   metadata?: Record<string, any>;
-}
-
-export interface SyncState {
-  isAutoSyncEnabled: boolean;
-  isSyncing: boolean;
-  lastSyncedAt: string | null;
-  status: 'ONLINE' | 'SYNCING' | 'OFFLINE' | 'ERROR';
-  pendingChangesCount: number;
 }
 
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   History,
   X,
@@ -11,7 +12,6 @@ import {
   Clock,
   UserCheck,
   AlertTriangle,
-  RefreshCw,
 } from 'lucide-react';
 import { DataUpdateLog, UpdateActionType } from '../types';
 
@@ -29,7 +29,7 @@ export const DataUpdateHistoryModal: React.FC<DataUpdateHistoryModalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<UpdateActionType | 'ALL'>('ALL');
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
   const filteredLogs = logs.filter((log) => {
     if (selectedType !== 'ALL' && log.actionType !== selectedType) {
@@ -98,9 +98,9 @@ export const DataUpdateHistoryModal: React.FC<DataUpdateHistoryModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="glass-modal rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-5 my-4 sm:my-8 max-h-[92dvh] overflow-y-auto animate-scaleUp">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="glass-modal rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-5 my-auto max-h-[90dvh] overflow-y-auto animate-scaleUp">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-900/10 dark:border-white/10 pb-4">
           <div className="flex items-center space-x-3">
@@ -289,6 +289,7 @@ export const DataUpdateHistoryModal: React.FC<DataUpdateHistoryModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

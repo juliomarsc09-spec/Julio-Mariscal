@@ -200,11 +200,11 @@ export function hydrateWatchlistsFromServer(
     } catch (e) {
       console.error('Failed to cache watchlists locally:', e);
     }
-    window.dispatchEvent(new CustomEvent('watchlist_updated'));
+    window.dispatchEvent(new CustomEvent('watchlist_updated', { detail: { source: 'cloud' } }));
   }
 }
 
-async function syncWatchlistsToServer(
+async function persistWatchlistsToServer(
   commodities: PriorityCommodityWatchItem[],
   countries: PriorityCountryWatchItem[],
   log: {
@@ -238,12 +238,12 @@ async function syncWatchlistsToServer(
             localStorage.setItem(COMMODITY_WATCHLIST_KEY, JSON.stringify(commoditiesCache));
             localStorage.setItem(COUNTRY_WATCHLIST_KEY, JSON.stringify(countriesCache));
           } catch (_) {}
-          window.dispatchEvent(new CustomEvent('watchlist_updated'));
+          window.dispatchEvent(new CustomEvent('watchlist_updated', { detail: { source: 'cloud' } }));
         }
       }
     }
   } catch (err) {
-    console.error('Failed to sync watchlists to server:', err);
+    console.error('Failed to persist watchlists to server:', err);
   }
 }
 
@@ -285,15 +285,20 @@ export function saveWatchlistCommodity(item: PriorityCommodityWatchItem): void {
     }
     commoditiesCache = list;
     localStorage.setItem(COMMODITY_WATCHLIST_KEY, JSON.stringify(list));
-    window.dispatchEvent(new CustomEvent('watchlist_updated'));
-
-    void syncWatchlistsToServer(list, getAllWatchlistCountries(), {
-      actionType: 'PENGAWASAN_UTAMA',
+    const logEntry = {
+      actionType: 'PENGAWASAN_UTAMA' as const,
       title: `Pengawasan Komoditas: ${normalizedItem.commodityName} (${formatPriorityLabel(normalizedItem.priorityLevel)})`,
       description: `Menetapkan komoditas ${normalizedItem.commodityName} [${normalizedItem.category}] pada prioritas pengawasan ${formatPriorityLabel(normalizedItem.priorityLevel)}.`,
       recordsAffected: 1,
       officerName: normalizedItem.officerName || 'Petugas BBKHIT DKI Jakarta',
-    });
+    };
+    window.dispatchEvent(
+      new CustomEvent('watchlist_updated', {
+        detail: { source: 'local', log: logEntry },
+      })
+    );
+
+    void persistWatchlistsToServer(list, getAllWatchlistCountries(), logEntry);
   } catch (e) {
     console.error('Failed to save watchlist commodity:', e);
   }
@@ -306,15 +311,20 @@ export function removeWatchlistCommodity(commodityName: string): void {
     );
     commoditiesCache = list;
     localStorage.setItem(COMMODITY_WATCHLIST_KEY, JSON.stringify(list));
-    window.dispatchEvent(new CustomEvent('watchlist_updated'));
-
-    void syncWatchlistsToServer(list, getAllWatchlistCountries(), {
-      actionType: 'PENGAWASAN_UTAMA',
+    const logEntry = {
+      actionType: 'PENGAWASAN_UTAMA' as const,
       title: `Hapus Pengawasan Komoditas: ${commodityName}`,
       description: `Mengeluarkan komoditas ${commodityName} dari daftar pengawasan utama BBKHIT.`,
       recordsAffected: 1,
       officerName: 'Petugas BBKHIT DKI Jakarta',
-    });
+    };
+    window.dispatchEvent(
+      new CustomEvent('watchlist_updated', {
+        detail: { source: 'local', log: logEntry },
+      })
+    );
+
+    void persistWatchlistsToServer(list, getAllWatchlistCountries(), logEntry);
   } catch (e) {
     console.error('Failed to remove watchlist commodity:', e);
   }
@@ -374,15 +384,20 @@ export function saveWatchlistCountry(item: PriorityCountryWatchItem): void {
     }
     countriesCache = list;
     localStorage.setItem(COUNTRY_WATCHLIST_KEY, JSON.stringify(list));
-    window.dispatchEvent(new CustomEvent('watchlist_updated'));
-
-    void syncWatchlistsToServer(getAllWatchlistCommodities(), list, {
-      actionType: 'PENGAWASAN_UTAMA',
+    const logEntry = {
+      actionType: 'PENGAWASAN_UTAMA' as const,
       title: `Pengawasan Negara: ${normalizedItem.countryName} (${formatPriorityLabel(normalizedItem.priorityLevel)})`,
       description: `Menetapkan negara ${normalizedItem.countryName} pada prioritas pengawasan ${formatPriorityLabel(normalizedItem.priorityLevel)}.`,
       recordsAffected: 1,
       officerName: normalizedItem.officerName || 'Petugas BBKHIT DKI Jakarta',
-    });
+    };
+    window.dispatchEvent(
+      new CustomEvent('watchlist_updated', {
+        detail: { source: 'local', log: logEntry },
+      })
+    );
+
+    void persistWatchlistsToServer(getAllWatchlistCommodities(), list, logEntry);
   } catch (e) {
     console.error('Failed to save watchlist country:', e);
   }
@@ -395,15 +410,20 @@ export function removeWatchlistCountry(countryName: string): void {
     );
     countriesCache = list;
     localStorage.setItem(COUNTRY_WATCHLIST_KEY, JSON.stringify(list));
-    window.dispatchEvent(new CustomEvent('watchlist_updated'));
-
-    void syncWatchlistsToServer(getAllWatchlistCommodities(), list, {
-      actionType: 'PENGAWASAN_UTAMA',
+    const logEntry = {
+      actionType: 'PENGAWASAN_UTAMA' as const,
       title: `Hapus Pengawasan Negara: ${countryName}`,
       description: `Mengeluarkan negara ${countryName} dari daftar pengawasan utama BBKHIT.`,
       recordsAffected: 1,
       officerName: 'Petugas BBKHIT DKI Jakarta',
-    });
+    };
+    window.dispatchEvent(
+      new CustomEvent('watchlist_updated', {
+        detail: { source: 'local', log: logEntry },
+      })
+    );
+
+    void persistWatchlistsToServer(getAllWatchlistCommodities(), list, logEntry);
   } catch (e) {
     console.error('Failed to remove watchlist country:', e);
   }

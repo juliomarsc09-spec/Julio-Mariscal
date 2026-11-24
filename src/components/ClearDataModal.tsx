@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Trash2,
   X,
@@ -65,7 +66,7 @@ export const ClearDataModal: React.FC<ClearDataModalProps> = ({
   const deleteCount = matchingRecords.length;
   const remainingCount = records.length - deleteCount;
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
   const handleExecuteClear = async () => {
     if (deleteCount === 0 || isDeleting) return;
@@ -87,9 +88,9 @@ export const ClearDataModal: React.FC<ClearDataModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
-      <div className="glass-modal rounded-3xl max-w-xl w-full p-5 sm:p-6 space-y-5 my-4 max-h-[92dvh] overflow-y-auto text-slate-800 dark:text-slate-200">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fadeIn">
+      <div className="glass-modal rounded-3xl max-w-xl w-full p-5 sm:p-6 space-y-5 my-auto max-h-[90dvh] overflow-y-auto text-slate-800 dark:text-slate-200">
         {/* Header */}
         <div className="flex items-start justify-between border-b border-slate-900/10 dark:border-white/10 pb-4">
           <div className="flex items-center space-x-3">
@@ -224,7 +225,7 @@ export const ClearDataModal: React.FC<ClearDataModalProps> = ({
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
               <p>
                 Tindakan ini menghapus {deleteCount.toLocaleString('id-ID')} record secara permanen
-                dari server dan tersinkron ke semua perangkat.
+                dari penyimpanan bersama (server &amp; cloud).
               </p>
             </div>
           )}
@@ -308,6 +309,7 @@ export const ClearDataModal: React.FC<ClearDataModalProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

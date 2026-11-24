@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   AlertTriangle,
@@ -163,11 +164,11 @@ export const PriorityCommodityModal: React.FC<PriorityCommodityModalProps> = ({
     onClose();
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md animate-fadeIn">
-      <div className="glass-modal rounded-3xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[92dvh]">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-900/45 dark:bg-slate-950/75 backdrop-blur-md animate-fadeIn">
+      <div className="glass-modal rounded-3xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90dvh] my-auto">
         {/* Header */}
         <div className="px-5 sm:px-6 py-4 bg-gradient-to-r from-amber-500/12 via-white/30 to-transparent dark:from-amber-950/60 dark:via-slate-900/40 dark:to-transparent border-b border-slate-200/60 dark:border-white/10 flex items-center justify-between gap-3">
           <div className="flex items-center space-x-3 min-w-0">
@@ -400,6 +401,7 @@ export const PriorityCommodityModal: React.FC<PriorityCommodityModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

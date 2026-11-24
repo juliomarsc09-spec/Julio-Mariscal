@@ -31,6 +31,9 @@ import {
   Download,
   FileSpreadsheet,
   RefreshCw,
+  Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -55,6 +58,15 @@ import {
   calculateTierRiskLevel,
 } from '../data/complianceScores';
 
+import { UploadProgressBar } from './UploadProgressBar';
+import {
+  UploadProgressCallback,
+  UploadProgressState,
+  formatBytesToMB,
+  formatUploadErrorMessage,
+  verifyExcelImportPasscode,
+} from '../utils/uploadWithProgress';
+
 interface ApplicantProfileViewProps {
   data: MediaPembawaRecord[];
   selectedPemohonName: string;
@@ -65,7 +77,8 @@ interface ApplicantProfileViewProps {
   companyContacts?: Record<string, CompanyContactInfo>;
   onSaveCompanyContact?: (companyName: string, pemilik: string, email: string) => Promise<void>;
   onBulkImportCompanyContacts?: (
-    items: Array<{ companyName: string; pemilik: string; email: string }>
+    items: Array<{ companyName: string; pemilik: string; email: string }>,
+    onProgress?: UploadProgressCallback
   ) => Promise<void>;
 }
 
@@ -117,6 +130,9 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
   >(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [isSavingBulk, setIsSavingBulk] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<UploadProgressState | null>(null);
+  const [bulkPasscode, setBulkPasscode] = useState('');
+  const [showBulkPasscode, setShowBulkPasscode] = useState(false);
   const bulkFileRef = React.useRef<HTMLInputElement>(null);
 
   // Default to first applicant if none selected
@@ -418,29 +434,48 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
     return parsed;
   };
 
-  const handleBulkFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBulkFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setBulkFileName(file.name);
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    setBulkFileName(`${file.name} (${sizeMB} MB)`);
     setBulkError(null);
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const buf = evt.target?.result;
-        if (!buf) throw new Error('Gagal membaca isi file.');
-        const wb = XLSX.read(buf, { type: 'array' });
-        const firstSheet = wb.SheetNames[0];
-        const ws = wb.Sheets[firstSheet];
-        const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
-        const parsed = parseContactRows(rows);
-        setBulkParsedItems(parsed);
-      } catch (err: any) {
-        setBulkError(err?.message || 'Gagal memproses file CSV/Excel.');
-        setBulkParsedItems(null);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-    e.target.value = '';
+
+    if (file.size > 25 * 1024 * 1024) {
+      setBulkError(`Ukuran file (${sizeMB} MB) melebihi batas maksimal 25 MB.`);
+      setBulkParsedItems(null);
+      e.target.value = '';
+      return;
+    }
+
+    setBulkProgress({
+      percent: 15,
+      phase: 'Membaca file CSV / Excel kontak...',
+      detail: `${file.name} (${formatBytesToMB(file.size)})`,
+    });
+
+    try {
+      const buf = await file.arrayBuffer();
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      setBulkProgress({
+        percent: 60,
+        phase: 'Mengurai daftar kontak perusahaan...',
+        detail: 'Memvalidasi kolom perusahaan, pemilik & email...',
+      });
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', dense: true });
+      const firstSheet = wb.SheetNames[0];
+      const ws = wb.Sheets[firstSheet];
+      const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
+      const parsed = parseContactRows(rows);
+      setBulkParsedItems(parsed);
+      setBulkProgress(null);
+    } catch (err: any) {
+      setBulkError(err?.message || 'Gagal memproses file CSV/Excel.');
+      setBulkParsedItems(null);
+      setBulkProgress(null);
+    } finally {
+      e.target.value = '';
+    }
   };
 
   const handleParseBulkPaste = () => {
@@ -574,13 +609,32 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
     setIsSavingBulk(true);
     setBulkError(null);
     try {
-      await onBulkImportCompanyContacts(bulkParsedItems);
+      await verifyExcelImportPasscode(bulkPasscode);
+
+      setBulkProgress({
+        percent: 2,
+        phase: 'Memulai unggah kontak perusahaan ke server...',
+        detail: `${bulkParsedItems.length.toLocaleString('id-ID')} perusahaan siap dikirim`,
+      });
+      await onBulkImportCompanyContacts(bulkParsedItems, (progress) => {
+        setBulkProgress(progress);
+      });
+      setBulkProgress({
+        percent: 100,
+        phase: 'Selesai 100% — Kontak perusahaan berhasil diunggah!',
+        detail: `${bulkParsedItems.length.toLocaleString('id-ID')} perusahaan diperbarui`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 420));
+      setBulkProgress(null);
       setBulkParsedItems(null);
       setBulkFileName(null);
       setBulkPasteText('');
+      setBulkPasscode('');
+      setShowBulkPasscode(false);
       setIsBulkModalOpen(false);
     } catch (err: any) {
-      setBulkError(err?.message || 'Gagal menyimpan data kontak perusahaan.');
+      setBulkProgress(null);
+      setBulkError(formatUploadErrorMessage(err, 'Gagal menyimpan data kontak perusahaan.'));
     } finally {
       setIsSavingBulk(false);
     }
@@ -1835,7 +1889,7 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
                   </div>
                   <p className="text-sm font-bold text-slate-900 dark:text-white">Klik untuk memilih file CSV / Excel</p>
                   <p className="text-xs text-slate-600 dark:text-slate-300">
-                    Mendukung template lengkap 17 kolom (No s.d. Status Blokir). Kolom utama yang diambil:{' '}
+                    Kapasitas file minimal 5MB (mendukung hingga 25MB). Mendukung template 17 kolom. Kolom utama yang diambil:{' '}
                     <span className="text-cyan-700 dark:text-cyan-300 font-semibold">Nama Perusahaan</span>,{' '}
                     <span className="text-cyan-700 dark:text-cyan-300 font-semibold">Nama Pemohon / Pemilik</span>, dan{' '}
                     <span className="text-cyan-700 dark:text-cyan-300 font-semibold">Email</span>
@@ -1904,24 +1958,66 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
                   </table>
                 </div>
 
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/35 space-y-2">
+                  <label
+                    htmlFor="bulk-excel-passcode"
+                    className="flex items-center space-x-2 text-xs font-extrabold text-amber-900 dark:text-amber-200"
+                  >
+                    <Lock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span>Password Konfirmasi Penambahan Impor Excel (Wajib)</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="bulk-excel-passcode"
+                      type={showBulkPasscode ? 'text' : 'password'}
+                      value={bulkPasscode}
+                      onChange={(e) => {
+                        setBulkPasscode(e.target.value);
+                        if (bulkError) setBulkError(null);
+                      }}
+                      placeholder="Masukkan password petugas untuk menyimpan impor Excel/CSV..."
+                      autoComplete="off"
+                      disabled={isSavingBulk}
+                      className="w-full min-h-[40px] glass-input rounded-xl pl-3.5 pr-10 py-2 text-xs font-semibold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkPasscode((prev) => !prev)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                      aria-label={showBulkPasscode ? 'Sembunyikan password' : 'Tampilkan password'}
+                    >
+                      {showBulkPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {bulkProgress && (
+                  <UploadProgressBar progress={bulkProgress} accent="cyan" />
+                )}
+
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2 border-t border-slate-900/10 dark:border-white/10">
                   <button
                     type="button"
-                    onClick={() => setIsBulkModalOpen(false)}
-                    className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 text-xs font-semibold border border-slate-900/10 dark:border-white/10"
+                    disabled={isSavingBulk}
+                    onClick={() => {
+                      setIsBulkModalOpen(false);
+                      setBulkPasscode('');
+                      setShowBulkPasscode(false);
+                    }}
+                    className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 text-xs font-semibold border border-slate-900/10 dark:border-white/10 disabled:opacity-50"
                   >
                     Batal
                   </button>
                   <button
                     type="button"
                     onClick={handleConfirmBulkContacts}
-                    disabled={isSavingBulk}
+                    disabled={isSavingBulk || !bulkPasscode.trim()}
                     className="min-h-[44px] inline-flex items-center justify-center space-x-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg disabled:opacity-50"
                   >
                     {isSavingBulk ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Menyimpan...</span>
+                        <span>Mengunggah {Math.round(bulkProgress?.percent || 0)}%...</span>
                       </>
                     ) : (
                       <>
@@ -1932,6 +2028,10 @@ export const ApplicantProfileView: React.FC<ApplicantProfileViewProps> = ({
                   </button>
                 </div>
               </div>
+            )}
+
+            {bulkProgress && !bulkParsedItems && (
+              <UploadProgressBar progress={bulkProgress} accent="cyan" />
             )}
 
             {bulkError && (

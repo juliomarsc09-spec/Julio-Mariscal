@@ -120,6 +120,62 @@ export function getCanonicalCompanyName(
   return `PT ${core}`;
 }
 
+/**
+ * Merges two comma/semicolon-separated string lists without overwriting existing values,
+ * deduplicating case-insensitively while preserving original order.
+ */
+export function mergeDelimitedLists(existingVal?: string, incomingVal?: string): string {
+  const result: string[] = [];
+  const seen = new Set<string>();
+
+  const pushItems = (raw?: string) => {
+    if (!raw) return;
+    const parts = String(raw)
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      const key = part.toUpperCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(part);
+      }
+    }
+  };
+
+  pushItems(existingVal);
+  pushItems(incomingVal);
+  return result.join(', ');
+}
+
+/**
+ * Adds incoming numeric frequency onto existing frequency when both are valid numbers.
+ */
+export function accumulateFrequency(
+  existingFreq?: string | number,
+  incomingFreq?: string | number
+): string | number | undefined {
+  const parseNum = (v?: string | number): number | null => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim().replace(',', '.');
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const a = parseNum(existingFreq);
+  const b = parseNum(incomingFreq);
+  if (a !== null && b !== null) {
+    const sum = a + b;
+    return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
+  }
+  if (b !== null) return b;
+  if (a !== null) return a;
+  const fallback = String(incomingFreq ?? existingFreq ?? '').trim();
+  return fallback || undefined;
+}
+
+
 export interface DeduplicationSummary {
   deduplicatedRecords: MediaPembawaRecord[];
   originalRecordsCount: number;

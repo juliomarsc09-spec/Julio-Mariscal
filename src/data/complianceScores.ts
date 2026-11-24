@@ -83,13 +83,15 @@ export function hydrateComplianceScoresFromServer(
   try {
     const normalized = scores && typeof scores === 'object' ? scores : {};
     localStorage.setItem(COMPLIANCE_STORAGE_KEY, JSON.stringify(normalized));
-    window.dispatchEvent(new CustomEvent('compliance_scores_updated'));
+    window.dispatchEvent(
+      new CustomEvent('compliance_scores_updated', { detail: { source: 'cloud' } })
+    );
   } catch (e) {
     console.error('Failed to hydrate compliance scores from server:', e);
   }
 }
 
-async function syncComplianceToServer(
+async function persistComplianceToServer(
   allScores: Record<string, CompanyComplianceData>,
   log: {
     actionType: 'PENILAIAN_SKOR';
@@ -117,13 +119,15 @@ async function syncComplianceToServer(
         try {
           localStorage.setItem(COMPLIANCE_STORAGE_KEY, JSON.stringify(data.complianceScores));
           if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('compliance_scores_updated'));
+            window.dispatchEvent(
+              new CustomEvent('compliance_scores_updated', { detail: { source: 'cloud' } })
+            );
           }
         } catch (_) {}
       }
     }
   } catch (err) {
-    console.error('Failed to sync compliance scores to server:', err);
+    console.error('Failed to persist compliance scores to server:', err);
   }
 }
 
@@ -208,24 +212,26 @@ export function adjustCompanyComplianceScore(
   const allScores = getAllComplianceScores();
   allScores[normalizedKey] = updatedData;
 
+  const logEntry = {
+    actionType: 'PENILAIAN_SKOR' as const,
+    title: `Skor Kepatuhan: ${normalizedKey} (${newScore}/100)`,
+    description: `${params.type === 'PENGURANGAN' ? 'Pengurangan' : 'Penambahan'} ${Math.abs(effectiveDelta)} poin (${params.reason.trim()}). Jalur: ${newTier}.`,
+    recordsAffected: 1,
+    officerName: newLog.officerName || 'Petugas BBKHIT DKI Jakarta',
+  };
+
   try {
     localStorage.setItem(COMPLIANCE_STORAGE_KEY, JSON.stringify(allScores));
     window.dispatchEvent(
       new CustomEvent('compliance_scores_updated', {
-        detail: { applicantName: normalizedKey, data: updatedData },
+        detail: { source: 'local', applicantName: normalizedKey, data: updatedData, log: logEntry },
       })
     );
   } catch (e) {
     console.error('Failed to save compliance scores to localStorage:', e);
   }
 
-  void syncComplianceToServer(allScores, {
-    actionType: 'PENILAIAN_SKOR',
-    title: `Skor Kepatuhan: ${normalizedKey} (${newScore}/100)`,
-    description: `${params.type === 'PENGURANGAN' ? 'Pengurangan' : 'Penambahan'} ${Math.abs(effectiveDelta)} poin (${params.reason.trim()}). Jalur: ${newTier}.`,
-    recordsAffected: 1,
-    officerName: newLog.officerName || 'Petugas BBKHIT DKI Jakarta',
-  });
+  void persistComplianceToServer(allScores, logEntry);
 
   return updatedData;
 }
@@ -263,24 +269,26 @@ export function resetCompanyComplianceScore(applicantName: string): CompanyCompl
   const allScores = getAllComplianceScores();
   allScores[normalizedKey] = updatedData;
 
+  const logEntry = {
+    actionType: 'PENILAIAN_SKOR' as const,
+    title: `Reset Skor Kepatuhan: ${normalizedKey}`,
+    description: `Mengembalikan skor kepatuhan ${normalizedKey} ke standar awal 100 (Jalur Hijau).`,
+    recordsAffected: 1,
+    officerName: 'Administrator BBKHIT DKI Jakarta',
+  };
+
   try {
     localStorage.setItem(COMPLIANCE_STORAGE_KEY, JSON.stringify(allScores));
     window.dispatchEvent(
       new CustomEvent('compliance_scores_updated', {
-        detail: { applicantName: normalizedKey, data: updatedData },
+        detail: { source: 'local', applicantName: normalizedKey, data: updatedData, log: logEntry },
       })
     );
   } catch (e) {
     console.error('Failed to reset compliance score in localStorage:', e);
   }
 
-  void syncComplianceToServer(allScores, {
-    actionType: 'PENILAIAN_SKOR',
-    title: `Reset Skor Kepatuhan: ${normalizedKey}`,
-    description: `Mengembalikan skor kepatuhan ${normalizedKey} ke standar awal 100 (Jalur Hijau).`,
-    recordsAffected: 1,
-    officerName: 'Administrator BBKHIT DKI Jakarta',
-  });
+  void persistComplianceToServer(allScores, logEntry);
 
   return updatedData;
 }
@@ -309,24 +317,26 @@ export function deleteCompanyScoreLog(applicantName: string, logId: string): Com
   const allScores = getAllComplianceScores();
   allScores[normalizedKey] = updatedData;
 
+  const logEntry = {
+    actionType: 'PENILAIAN_SKOR' as const,
+    title: `Hapus Riwayat Skor: ${normalizedKey}`,
+    description: `Menghapus entri penyesuaian skor kepatuhan untuk ${normalizedKey}. Skor kini ${calculatedScore}/100 (${updatedData.tier}).`,
+    recordsAffected: 1,
+    officerName: 'Administrator BBKHIT DKI Jakarta',
+  };
+
   try {
     localStorage.setItem(COMPLIANCE_STORAGE_KEY, JSON.stringify(allScores));
     window.dispatchEvent(
       new CustomEvent('compliance_scores_updated', {
-        detail: { applicantName: normalizedKey, data: updatedData },
+        detail: { source: 'local', applicantName: normalizedKey, data: updatedData, log: logEntry },
       })
     );
   } catch (e) {
     console.error('Failed to update compliance scores after log deletion:', e);
   }
 
-  void syncComplianceToServer(allScores, {
-    actionType: 'PENILAIAN_SKOR',
-    title: `Hapus Riwayat Skor: ${normalizedKey}`,
-    description: `Menghapus entri penyesuaian skor kepatuhan untuk ${normalizedKey}. Skor kini ${calculatedScore}/100 (${updatedData.tier}).`,
-    recordsAffected: 1,
-    officerName: 'Administrator BBKHIT DKI Jakarta',
-  });
+  void persistComplianceToServer(allScores, logEntry);
 
   return updatedData;
 }
